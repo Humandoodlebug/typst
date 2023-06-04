@@ -2,10 +2,10 @@ use typst::font::FontWeight;
 use typst::util::option_eq;
 
 use super::{Counter, CounterUpdate, LocalName, Numbering, Outlinable, Refable};
-use crate::layout::{BlockElem, HElem, VElem};
+use crate::layout::{BlockElem, HElem, Spacing, VElem};
 use crate::meta::{Count, Supplement};
 use crate::prelude::*;
-use crate::text::{SpaceElem, TextElem, TextSize};
+use crate::text::{TextElem, TextSize};
 
 /// A section heading.
 ///
@@ -93,6 +93,10 @@ pub struct HeadingElem {
     #[default(true)]
     pub outlined: bool,
 
+    /// The amount of spacing between the numbering and body (title) of the heading.
+    #[default(Em::new(0.3).into())]
+    pub numbering_spacing: Spacing,
+
     /// The heading's title.
     #[required]
     pub body: Content,
@@ -113,6 +117,7 @@ impl Synthesize for HeadingElem {
         self.push_numbering(self.numbering(styles));
         self.push_supplement(Smart::Custom(Some(Supplement::Content(supplement))));
         self.push_outlined(self.outlined(styles));
+        self.push_numbering_spacing(self.numbering_spacing(styles));
 
         Ok(())
     }
@@ -126,7 +131,7 @@ impl Show for HeadingElem {
             realized = Counter::of(Self::func())
                 .display(Some(numbering), false)
                 .spanned(self.span())
-                + HElem::new(Em::new(0.3).into()).with_weak(true).pack()
+                + HElem::new(self.numbering_spacing(styles)).with_weak(true).pack()
                 + realized;
         }
         Ok(BlockElem::new().with_body(Some(realized)).pack())
@@ -198,7 +203,11 @@ impl Outlinable for HeadingElem {
             let numbers = Counter::of(Self::func())
                 .at(vt, self.0.location().unwrap())?
                 .display(vt, &numbering)?;
-            content = numbers + SpaceElem::new().pack() + content;
+            content = numbers
+                + HElem::new(self.numbering_spacing(StyleChain::default()))
+                    .with_weak(true)
+                    .pack()
+                + content;
         };
 
         Ok(Some(content))
