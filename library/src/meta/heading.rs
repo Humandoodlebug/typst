@@ -2,10 +2,10 @@ use typst::font::FontWeight;
 use typst::util::option_eq;
 
 use super::{Counter, CounterUpdate, LocalName, Numbering, Outlinable, Refable};
-use crate::layout::{BlockElem, HElem, Spacing, VElem};
+use crate::layout::{BlockElem, HElem, VElem};
 use crate::meta::{Count, Supplement};
 use crate::prelude::*;
-use crate::text::{TextElem, TextSize};
+use crate::text::{SpaceElem, TextElem, TextSize};
 
 /// A section heading.
 ///
@@ -93,9 +93,11 @@ pub struct HeadingElem {
     #[default(true)]
     pub outlined: bool,
 
-    /// The amount of spacing between the numbering and body (title) of the heading.
-    #[default(Em::new(0.3).into())]
-    pub numbering_spacing: Spacing,
+    /// Determines how to display the heading.
+    pub display: Option<Func>,
+
+    /// Determines how to display the heading in an outline.
+    pub outline: Option<Func>,
 
     /// The heading's title.
     #[required]
@@ -117,7 +119,8 @@ impl Synthesize for HeadingElem {
         self.push_numbering(self.numbering(styles));
         self.push_supplement(Smart::Custom(Some(Supplement::Content(supplement))));
         self.push_outlined(self.outlined(styles));
-        self.push_numbering_spacing(self.numbering_spacing(styles));
+        self.push_display(self.display(styles));
+        self.push_outline(self.outline(styles));
 
         Ok(())
     }
@@ -125,15 +128,28 @@ impl Synthesize for HeadingElem {
 
 impl Show for HeadingElem {
     #[tracing::instrument(name = "HeadingElem::show", skip_all)]
-    fn show(&self, _: &mut Vt, styles: StyleChain) -> SourceResult<Content> {
-        let mut realized = self.body();
-        if let Some(numbering) = self.numbering(styles) {
-            realized = Counter::of(Self::func())
+    fn show(&self, vt: &mut Vt, styles: StyleChain) -> SourceResult<Content> {
+        let body = self.body();
+        let numbers = self.numbering(styles).map(|numbering| {
+            Counter::of(Self::func())
                 .display(Some(numbering), false)
                 .spanned(self.span())
-                + HElem::new(self.numbering_spacing(styles)).with_weak(true).pack()
-                + realized;
-        }
+        });
+        let display = self.display(styles);
+
+        let realized = match (numbers, display) {
+            (Some(numbers), None) => {
+                numbers + HElem::new(Em::new(0.3).into()).with_weak(true).pack() + body
+            }
+            (Some(numbers), Some(display)) => display
+                .call_vt(vt, [Value::Content(numbers), Value::Content(body)])?
+                .display(),
+            (None, Some(outline)) => {
+                outline.call_vt(vt, [Value::None, Value::Content(body)])?.display()
+            }
+            (None, None) => self.body(),
+        };
+
         Ok(BlockElem::new().with_body(Some(realized)).pack())
     }
 }
@@ -194,20 +210,31 @@ impl Refable for HeadingElem {
 
 impl Outlinable for HeadingElem {
     fn outline(&self, vt: &mut Vt) -> SourceResult<Option<Content>> {
-        if !self.outlined(StyleChain::default()) {
+        let styles = StyleChain::default();
+        if !self.outlined(styles) {
             return Ok(None);
         }
 
-        let mut content = self.body();
-        if let Some(numbering) = self.numbering(StyleChain::default()) {
-            let numbers = Counter::of(Self::func())
-                .at(vt, self.0.location().unwrap())?
-                .display(vt, &numbering)?;
-            content = numbers
-                + HElem::new(self.numbering_spacing(StyleChain::default()))
-                    .with_weak(true)
-                    .pack()
-                + content;
+        let numbers = self
+            .numbering(styles)
+            .map(|numbering| {
+                Counter::of(Self::func())
+                    .at(vt, self.0.location().unwrap())?
+                    .display(vt, &numbering)
+            })
+            .transpose()?;
+        let body = self.body();
+        let outline = self.outline(styles);
+
+        let content = match (numbers, outline) {
+            (Some(numbers), None) => numbers + SpaceElem::new().pack() + body,
+            (Some(numbers), Some(outline)) => outline
+                .call_vt(vt, [Value::Content(numbers), Value::Content(body)])?
+                .display(),
+            (None, Some(outline)) => {
+                outline.call_vt(vt, [Value::None, Value::Content(body)])?.display()
+            }
+            (None, None) => self.body(),
         };
 
         Ok(Some(content))
